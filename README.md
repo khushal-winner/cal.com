@@ -150,6 +150,19 @@ Here is what you need to be able to run Cal.com.
    - Use `openssl rand -base64 32` to generate a key and add it under `NEXTAUTH_SECRET` in the `.env` file.
    - Use `openssl rand -base64 24` to generate a key and add it under `CALENDSO_ENCRYPTION_KEY` in the `.env` file.
 
+   **Windows users**: After setting up your `.env` file, you may encounter an issue with `packages/prisma/.env` being a symlink that fails with "unexpected character / in variable name". This happens because Windows doesn't handle Unix-style symlinks properly.
+
+   **Option 1: Use commands** (if you have Git Bash or WSL):
+   ```sh
+   rm packages/prisma/.env
+   cp .env packages/prisma/.env
+   ```
+
+   **Option 2: Do this manually**:
+   1. Delete the file `packages/prisma/.env` (it's actually a symlink)
+   2. Copy your `.env` file from the root directory
+   3. Paste it into the `packages/prisma/` folder
+
 5. Setup Node
    If your Node version does not meet the project's requirements as instructed by the docs, "nvm" (Node Version Manager) allows using Node at the version required by the project:
 
