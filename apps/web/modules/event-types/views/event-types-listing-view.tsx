@@ -57,7 +57,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type React from "react";
 import type { FC } from "react";
-import { createContext, memo, useContext, useEffect, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 
 type GetUserEventGroupsResponse = RouterOutputs["viewer"]["eventTypes"]["getUserEventGroups"];
@@ -113,6 +113,9 @@ interface InfiniteTeamsTabProps {
 const querySchema = z.object({
   teamId: z.nullable(z.coerce.number()).optional().default(null),
 });
+
+// ─── isNativeShare moved outside component to avoid per-render state ──────────
+const isNativeShare = typeof navigator !== "undefined" && !!navigator.share;
 
 const InfiniteTeamsTab: FC<InfiniteTeamsTabProps> = (props: InfiniteTeamsTabProps) => {
   const { activeEventTypeGroup } = props;
@@ -170,6 +173,7 @@ const InfiniteTeamsTab: FC<InfiniteTeamsTabProps> = (props: InfiniteTeamsTabProp
   );
 };
 
+// ─── Item: duplication fix — single JSX block with conditional rendering ──────
 const Item = ({
   type,
   group,
@@ -191,7 +195,8 @@ const Item = ({
   const isCurrentUserHost = "isCurrentUserHost" in type && type.isCurrentUserHost;
   const showAssignedBadge = isRoundRobinOrCollective && isCurrentUserHost;
 
-  const content = (): JSX.Element => (
+  // Shared title/badges block — used regardless of readOnly
+  const titleBlock = (
     <div>
       <span
         className="text-default break-words font-semibold ltr:mr-1 rtl:ml-1"
@@ -231,40 +236,12 @@ const Item = ({
       <div className={classNames(eventTypeColor && "ml-3")}>
         {readOnly ? (
           <div>
-            {content()}
+            {titleBlock}
             <EventTypeDescription eventType={type} shortenDescription />
           </div>
         ) : (
           <Link href={`/event-types/${type.id}?tabName=setup`} title={type.title}>
-            <div>
-              <span
-                className="text-default break-words font-semibold ltr:mr-1 rtl:ml-1"
-                data-testid={`event-type-title-${type.id}`}>
-                {type.title}
-              </span>
-              {group.profile.slug && type.schedulingType !== SchedulingType.MANAGED ? (
-                <small
-                  className="text-subtle hidden font-normal leading-4 sm:inline"
-                  data-testid={`event-type-slug-${type.id}`}>
-                  {`/${group.profile.slug}/${type.slug}`}
-                </small>
-              ) : null}
-              {!isManagedEventType && type.hidden && (
-                <span className="ml-2 text-sm text-gray-400 sm:hidden">{t("hidden")}</span>
-              )}
-              {readOnly && (
-                <Badge variant="gray" className="ml-2" data-testid="readonly-badge">
-                  {t("readonly")}
-                </Badge>
-              )}
-              {showAssignedBadge && (
-                <Tooltip content={t("you_are_assigned_to_this_event")}>
-                  <Badge variant="blue" className="ml-2" data-testid="assigned-badge">
-                    {t("assigned")}
-                  </Badge>
-                </Tooltip>
-              )}
-            </div>
+            {titleBlock}
             <EventTypeDescription
               eventType={{
                 ...type,
@@ -281,7 +258,8 @@ const Item = ({
 
 const MemoizedItem = memo(Item);
 
-export const InfiniteEventTypeList = ({
+// ─── InfiniteEventTypeList wrapped in memo ────────────────────────────────────
+export const InfiniteEventTypeList = memo(function InfiniteEventTypeList({
   group,
   readOnly,
   pages,
@@ -289,7 +267,7 @@ export const InfiniteEventTypeList = ({
   lockedByOrg,
   isPending,
   debouncedSearchTerm,
-}: InfiniteEventTypeListProps): JSX.Element => {
+}: InfiniteEventTypeListProps): JSX.Element {
   const { t } = useLocale();
   const router = useRouter();
   const pathname = usePathname();
@@ -307,7 +285,6 @@ export const InfiniteEventTypeList = ({
   const mutation = trpc.viewer.loggedInViewerRouter.eventTypeOrder.useMutation({
     onError: async (err) => {
       console.error(err.message);
-      // REVIEW: Should we invalidate the entire router or just the `getByViewer` query?
       await utils.viewer.eventTypes.getEventTypesFromGroup.cancel();
     },
   });
@@ -330,10 +307,7 @@ export const InfiniteEventTypeList = ({
           },
           (oldData) => {
             if (!oldData) {
-              return {
-                pages: [],
-                pageParams: [],
-              };
+              return { pages: [], pageParams: [] };
             }
             return {
               ...oldData,
@@ -365,84 +339,7 @@ export const InfiniteEventTypeList = ({
     },
   });
 
-  async function moveEventType(index: number, increment: 1 | -1): Promise<void> {
-    if (!pages) return;
-    const newOrder = pages;
-    const pageNo = Math.floor(index / LIMIT);
-
-    const currentPositionEventType = newOrder[pageNo].eventTypes[index % LIMIT];
-
-    const newPageNo =
-      increment === -1
-        ? pageNo > 0 && index % LIMIT === 0
-          ? pageNo - 1
-          : pageNo
-        : index % LIMIT === LIMIT - 1
-          ? pageNo + 1
-          : pageNo;
-
-    const newIdx = (index + increment) % LIMIT;
-    const newPositionEventType = newOrder[newPageNo].eventTypes[newIdx];
-
-    newOrder[pageNo].eventTypes[index % LIMIT] = newPositionEventType;
-    newOrder[newPageNo].eventTypes[newIdx] = currentPositionEventType;
-
-    await utils.viewer.eventTypes.getEventTypesFromGroup.cancel();
-    const previousValue = utils.viewer.eventTypes.getEventTypesFromGroup.getInfiniteData({
-      limit: LIMIT,
-      searchQuery: debouncedSearchTerm,
-      group: { teamId: group?.teamId, parentId: group?.parentId },
-    });
-
-    if (previousValue) {
-      utils.viewer.eventTypes.getEventTypesFromGroup.setInfiniteData(
-        {
-          limit: LIMIT,
-          searchQuery: debouncedSearchTerm,
-          group: { teamId: group?.teamId, parentId: group?.parentId },
-        },
-        (data) => {
-          if (!data) return { pages: [], pageParams: [] };
-
-          return {
-            ...data,
-            pages: newOrder.map((page) => ({
-              ...page,
-              nextCursor: page.nextCursor ?? undefined,
-            })),
-          };
-        }
-      );
-    }
-
-    mutation.mutate({
-      ids: newOrder.flatMap((page) => page.eventTypes.map((type) => type.id)),
-    });
-  }
-
-  async function deleteEventTypeHandler(id: number): Promise<void> {
-    const payload = { id };
-    deleteMutation.mutate(payload);
-  }
-
-  // inject selection data into url for correct router history
-  const openDuplicateModal = (eventType: InfiniteEventType, group: InfiniteEventTypeGroup): void => {
-    const newSearchParams = new URLSearchParams(searchParams?.toString() ?? undefined);
-    function setParamsIfDefined(key: string, value: string | number | boolean | null | undefined) {
-      if (value) newSearchParams.set(key, value.toString());
-      if (value === null) newSearchParams.delete(key);
-    }
-        setParamsIfDefined("dialog", "duplicate");
-        setParamsIfDefined("title", eventType.title);
-        setParamsIfDefined("description", eventType.description);
-        setParamsIfDefined("slug", eventType.slug);
-        setParamsIfDefined("id", eventType.id);
-        setParamsIfDefined("length", eventType.length);
-        setParamsIfDefined("pageSlug", group.profile.slug);
-        setParamsIfDefined("schedulingType", eventType.schedulingType);
-        router.push(`${pathname}?${newSearchParams.toString()}`);
-  };
-
+  // ─── deleteMutation declared first so deleteEventTypeHandler can reference it ──
   const deleteMutation = trpc.viewer.eventTypes.delete.useMutation({
     onSuccess: () => {
       showToast(t("event_type_deleted_successfully"), "success");
@@ -465,10 +362,7 @@ export const InfiniteEventTypeList = ({
           },
           (data) => {
             if (!data) {
-              return {
-                pages: [],
-                pageParams: [],
-              };
+              return { pages: [], pageParams: [] };
             }
             return {
               ...data,
@@ -504,13 +398,112 @@ export const InfiniteEventTypeList = ({
     },
   });
 
-  const [isNativeShare, setNativeShare] = useState(true);
+  // ─── useCallback hooks — all declared before any early return ────────────────
+  const moveEventType = useCallback(
+    async (index: number, increment: 1 | -1): Promise<void> => {
+      if (!pages) return;
+      const newOrder = pages;
+      const pageNo = Math.floor(index / LIMIT);
 
-  useEffect(() => {
-    if (!navigator.share) {
-      setNativeShare(false);
-    }
-  }, []);
+      const currentPositionEventType = newOrder[pageNo].eventTypes[index % LIMIT];
+
+      const newPageNo =
+        increment === -1
+          ? pageNo > 0 && index % LIMIT === 0
+            ? pageNo - 1
+            : pageNo
+          : index % LIMIT === LIMIT - 1
+            ? pageNo + 1
+            : pageNo;
+
+      const newIdx = (index + increment) % LIMIT;
+      const newPositionEventType = newOrder[newPageNo].eventTypes[newIdx];
+
+      newOrder[pageNo].eventTypes[index % LIMIT] = newPositionEventType;
+      newOrder[newPageNo].eventTypes[newIdx] = currentPositionEventType;
+
+      await utils.viewer.eventTypes.getEventTypesFromGroup.cancel();
+      const previousValue = utils.viewer.eventTypes.getEventTypesFromGroup.getInfiniteData({
+        limit: LIMIT,
+        searchQuery: debouncedSearchTerm,
+        group: { teamId: group?.teamId, parentId: group?.parentId },
+      });
+
+      if (previousValue) {
+        utils.viewer.eventTypes.getEventTypesFromGroup.setInfiniteData(
+          {
+            limit: LIMIT,
+            searchQuery: debouncedSearchTerm,
+            group: { teamId: group?.teamId, parentId: group?.parentId },
+          },
+          (data) => {
+            if (!data) return { pages: [], pageParams: [] };
+            return {
+              ...data,
+              pages: newOrder.map((page) => ({
+                ...page,
+                nextCursor: page.nextCursor ?? undefined,
+              })),
+            };
+          }
+        );
+      }
+
+      mutation.mutate({
+        ids: newOrder.flatMap((page) => page.eventTypes.map((type) => type.id)),
+      });
+    },
+    [pages, debouncedSearchTerm, group, utils, mutation]
+  );
+
+  const deleteEventTypeHandler = useCallback(
+    async (id: number): Promise<void> => {
+      deleteMutation.mutate({ id });
+    },
+    [deleteMutation]
+  );
+
+  const openDuplicateModal = useCallback(
+    (eventType: InfiniteEventType, group: InfiniteEventTypeGroup): void => {
+      const newSearchParams = new URLSearchParams(searchParams?.toString() ?? undefined);
+      function setParamsIfDefined(key: string, value: string | number | boolean | null | undefined) {
+        if (value) newSearchParams.set(key, value.toString());
+        if (value === null) newSearchParams.delete(key);
+      }
+      setParamsIfDefined("dialog", "duplicate");
+      setParamsIfDefined("title", eventType.title);
+      setParamsIfDefined("description", eventType.description);
+      setParamsIfDefined("slug", eventType.slug);
+      setParamsIfDefined("id", eventType.id);
+      setParamsIfDefined("length", eventType.length);
+      setParamsIfDefined("pageSlug", group.profile.slug);
+      setParamsIfDefined("schedulingType", eventType.schedulingType);
+      router.push(`${pathname}?${newSearchParams.toString()}`);
+    },
+    [searchParams, pathname, router]
+  );
+
+  const isManagedEventPrefix = useCallback((): string => {
+    return deleteDialogTypeSchedulingType === SchedulingType.MANAGED ? "_managed" : "";
+  }, [deleteDialogTypeSchedulingType]);
+
+  // ─── firstItem/lastItem derived before useMemo so deps are stable ────────────
+  const firstItem = pages?.[0]?.eventTypes[0];
+  const lastItem = pages?.[pages.length - 1]?.eventTypes[pages?.[pages.length - 1].eventTypes.length - 1];
+
+  // ─── useMemo: userTimezone only recomputes when firstItem fields change ───────
+  const userTimezone = useMemo(
+    () =>
+      extractHostTimezone({
+        userId: firstItem?.userId,
+        teamId: firstItem?.teamId,
+        hosts: firstItem?.hosts,
+        owner: firstItem?.owner,
+        team: firstItem?.team,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [firstItem?.userId, firstItem?.teamId, firstItem?.hosts, firstItem?.owner, firstItem?.team]
+  );
 
   if (!pages?.[0]?.eventTypes?.length) {
     if (isPending) return <InfiniteSkeletonLoader />;
@@ -524,31 +517,17 @@ export const InfiniteEventTypeList = ({
     );
   }
 
-  const firstItem = pages?.[0]?.eventTypes[0];
-  const lastItem = pages?.[pages.length - 1]?.eventTypes[pages?.[pages.length - 1].eventTypes.length - 1];
-  const isManagedEventPrefix = () => {
-    return deleteDialogTypeSchedulingType === SchedulingType.MANAGED ? "_managed" : "";
-  };
-
-  const userTimezone = extractHostTimezone({
-    userId: firstItem.userId,
-    teamId: firstItem?.teamId,
-    hosts: firstItem?.hosts,
-    owner: firstItem?.owner,
-    team: firstItem?.team,
-  });
-
   return (
     <div className="bg-default border-subtle flex flex-col overflow-hidden rounded-md border">
+      {/* ─── flatMap replaces nested .map() returning array-of-arrays ─────── */}
       <ul ref={parent} className="divide-subtle static! w-full divide-y" data-testid="event-types">
-        {pages.map((page, pageIdx) => {
-          return page?.eventTypes?.map((type, index) => {
+        {pages.flatMap((page, pageIdx) =>
+          page?.eventTypes?.map((type, index) => {
             const embedLink = `${group.profile.slug}/${type.slug}`;
             const calLink = `${bookerUrl}/${embedLink}`;
 
             const activeHashedLinks = type.hashedLink ? filterActiveLinks(type.hashedLink, userTimezone) : [];
 
-            // Ensure index is within bounds for active links
             const currentIndex = privateLinkCopyIndices[type.slug] ?? 0;
             const safeIndex = activeHashedLinks.length > 0 ? currentIndex % activeHashedLinks.length : 0;
 
@@ -560,6 +539,7 @@ export const InfiniteEventTypeList = ({
             const isChildrenManagedEventType =
               type.metadata?.managedEventConfig !== undefined &&
               type.schedulingType !== SchedulingType.MANAGED;
+
             return (
               <li key={type.id}>
                 <div className="hover:bg-cal-muted flex w-full items-center justify-between transition">
@@ -679,7 +659,6 @@ export const InfiniteEventTypeList = ({
                                   variant="icon"
                                   color="secondary"
                                   StartIcon="ellipsis"
-                                  // Unusual practice to use radix state open but for some reason this dropdown and only this dropdown clears the border radius of this button.
                                   className="ltr:radix-state-open:rounded-r-(--btn-group-radius) rtl:radix-state-open:rounded-l-(--btn-group-radius)"
                                 />
                               </DropdownMenuTrigger>
@@ -695,7 +674,6 @@ export const InfiniteEventTypeList = ({
                                     </DropdownItem>
                                   </DropdownMenuItem>
                                 )}
-                                {/* readonly is only set when we are on a team - if we are on a user event type null will be the value. */}
                                 {!readOnly && !isChildrenManagedEventType && (
                                   <DropdownMenuItem className="outline-none">
                                     <DropdownItem
@@ -721,7 +699,6 @@ export const InfiniteEventTypeList = ({
                                     </EventTypeEmbedButton>
                                   </DropdownMenuItem>
                                 )}
-                                {/* readonly is only set when we are on a team - if we are on a user event type null will be the value. */}
                                 {!readOnly && !isChildrenManagedEventType && (
                                   <>
                                     <DropdownMenuSeparator />
@@ -787,9 +764,7 @@ export const InfiniteEventTypeList = ({
                                   navigator
                                     .share({
                                       title: t("share"),
-                                      text: t("share_event", {
-                                        appName: APP_NAME,
-                                      }),
+                                      text: t("share_event", { appName: APP_NAME }),
                                       url: calLink,
                                     })
                                     .then(() => showToast(t("link_shared"), "success"))
@@ -821,7 +796,6 @@ export const InfiniteEventTypeList = ({
                               </DropdownItem>
                             </DropdownMenuItem>
                           )}
-                          {/* readonly is only set when we are on a team - if we are on a user event type null will be the value. */}
                           {!readOnly && !isChildrenManagedEventType && (
                             <>
                               <DropdownMenuItem className="outline-none">
@@ -868,8 +842,8 @@ export const InfiniteEventTypeList = ({
                 </div>
               </li>
             );
-          });
-        })}
+          })
+        )}
       </ul>
 
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -897,7 +871,7 @@ export const InfiniteEventTypeList = ({
       </Dialog>
     </div>
   );
-};
+});
 
 const CreateFirstEventTypeView = ({ slug, searchTerm }: { slug: string; searchTerm?: string }) => {
   const { t } = useLocale();
@@ -998,9 +972,6 @@ const InfiniteScrollMain = ({
 
   const bookerUrl = orgBranding ? orgBranding?.fullDomain : WEBSITE_URL;
 
-  // If the event type group is the same as the org branding team, or the parent team, set the bookerUrl to the org branding URL
-  // This is to ensure that the bookerUrl is always the same as the one in the org branding settings
-  // This keeps the app working for personal event types that were not migrated to the org (rare)
   if (
     orgBranding &&
     (activeEventTypeGroup[0].teamId === orgBranding.id || activeEventTypeGroup[0].parentId === orgBranding.id)
@@ -1033,19 +1004,12 @@ export const EventTypesCTA = ({ userEventGroupsData }: Omit<Props, "user">) => {
       ?.filter((profile) => !profile.readOnly)
       ?.filter((profile) => !profile.eventTypesLockedByOrg)
       ?.filter((profile) => {
-        // For personal profiles (teamId is null), always allow creation
         if (!profile.teamId) {
           return true;
         }
-
-        // For team profiles, check if user has eventType.create permission
-        // This will be populated by the server-side PBAC check
-        // Fallback to role-based check (admin/owner) if canCreateEventTypes is not set
         if (profile.canCreateEventTypes !== undefined) {
           return profile.canCreateEventTypes;
         }
-
-        // Fallback: allow admin and owner roles
         return (
           profile.membershipRole === MembershipRole.ADMIN || profile.membershipRole === MembershipRole.OWNER
         );
@@ -1054,7 +1018,6 @@ export const EventTypesCTA = ({ userEventGroupsData }: Omit<Props, "user">) => {
         const permissions = profile.teamId
           ? userEventGroupsData.teamPermissions[profile.teamId]
           : {
-              // always can create eventType on personal level
               canCreateEventType: true,
             };
 
@@ -1077,10 +1040,6 @@ const EventTypesPage = ({ userEventGroupsData, user }: Props) => {
   const router = useRouter();
 
   useEffect(() => {
-    /**
-     * During signup, if the account already exists, we redirect the user to /event-types instead of onboarding.
-     * Adding this redirection logic here as well to ensure the user is redirected to the correct redirectUrl.
-     */
     const redirectUrl = localStorage.getItem("onBoardingRedirect");
     localStorage.removeItem("onBoardingRedirect");
     if (redirectUrl) {
