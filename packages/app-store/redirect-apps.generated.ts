@@ -25,6 +25,7 @@ export const REDIRECT_APPS = [
   "pipedream",
   "raycast",
   "retell-ai",
+  "vimcal",
   "synthflow",
   "telli",
   "wordpress",
