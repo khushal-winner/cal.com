@@ -114,9 +114,6 @@ const querySchema = z.object({
   teamId: z.nullable(z.coerce.number()).optional().default(null),
 });
 
-// ─── isNativeShare moved outside component to avoid per-render state ──────────
-const isNativeShare = typeof navigator !== "undefined" && !!navigator.share;
-
 const InfiniteTeamsTab: FC<InfiniteTeamsTabProps> = (props: InfiniteTeamsTabProps) => {
   const { activeEventTypeGroup } = props;
   const { debouncedSearchTerm } = useSearchContext();
@@ -487,9 +484,16 @@ export const InfiniteEventTypeList = memo(function InfiniteEventTypeList({
     return deleteDialogTypeSchedulingType === SchedulingType.MANAGED ? "_managed" : "";
   }, [deleteDialogTypeSchedulingType]);
 
-  // ─── firstItem/lastItem derived before useMemo so deps are stable ────────────
-  const firstItem = pages?.[0]?.eventTypes[0];
-  const lastItem = pages?.[pages.length - 1]?.eventTypes[pages?.[pages.length - 1].eventTypes.length - 1];
+  // ─── Safe isNativeShare check to avoid hydration mismatch ────────────────
+  const [isNativeShare, setIsNativeShare] = useState(false);
+  
+  useEffect(() => {
+    setIsNativeShare(typeof navigator !== "undefined" && !!navigator.share);
+  }, []);
+
+  // ─── Safe firstItem/lastItem access with proper guards ───────────────────────
+  const firstItem = pages?.[0]?.eventTypes?.[0] ?? null;
+  const lastItem = pages?.[pages.length - 1]?.eventTypes?.[pages?.[pages.length - 1]?.eventTypes?.length - 1] ?? null;
 
   // ─── useMemo: userTimezone only recomputes when firstItem fields change ───────
   const userTimezone = useMemo(
