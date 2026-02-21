@@ -114,6 +114,9 @@ const querySchema = z.object({
   teamId: z.nullable(z.coerce.number()).optional().default(null),
 });
 
+// ─── isNativeShare moved outside component to avoid per-render state ──────────
+const isNativeShare = typeof navigator !== "undefined" && !!navigator.share;
+
 const InfiniteTeamsTab: FC<InfiniteTeamsTabProps> = (props: InfiniteTeamsTabProps) => {
   const { activeEventTypeGroup } = props;
   const { debouncedSearchTerm } = useSearchContext();
