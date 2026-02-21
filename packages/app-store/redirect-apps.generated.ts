@@ -28,11 +28,8 @@ export const REDIRECT_APPS = [
   "vimcal",
   "synthflow",
   "telli",
-<<<<<<< HEAD
   "link-as-an-app",
   "vimcal",
-=======
->>>>>>> 89c3b809de522a5025339b78a8ba7bb527cd77d5
   "wordpress",
   "zapier",
 ] as const;
