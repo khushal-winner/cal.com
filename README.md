@@ -158,11 +158,6 @@ Here is what you need to be able to run Cal.com.
    cp .env packages/prisma/.env
    ```
 
-   **Option 2: Do this manually**:
-   1. Delete the file `packages/prisma/.env` (it's actually a symlink)
-   2. Copy your `.env` file from the root directory
-   3. Paste it into the `packages/prisma/` folder
-
 5. Setup Node
    If your Node version does not meet the project's requirements as instructed by the docs, "nvm" (Node Version Manager) allows using Node at the version required by the project:
 
